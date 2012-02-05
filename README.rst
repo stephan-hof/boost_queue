@@ -7,8 +7,6 @@ Python-2.X Queue.Queue uses a busy loop in case of a blocking operation.
 This queue implementation uses condition variables from Boost to avoid the busy
 loop.
 
-Currently Queue.join() and Queue.task_done() are missing. 
-
 Changelog
 =========
 
