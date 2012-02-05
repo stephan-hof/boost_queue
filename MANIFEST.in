@@ -1,0 +1,2 @@
+include con_queue.hpp
+include README.rst
