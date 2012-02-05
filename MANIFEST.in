@@ -1,2 +1,2 @@
-include con_queue.hpp
+include concurrent_queue.hpp
 include README.rst
