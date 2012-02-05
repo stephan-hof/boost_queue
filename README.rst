@@ -12,7 +12,7 @@ concurrent_queue.hpp contains the Python independent C++ Queue
 Changelog
 =========
 
-0.1 - Februrary 02, 2012
+0.1 - February 02, 2012
 ----------------------
 
 - Initial release
