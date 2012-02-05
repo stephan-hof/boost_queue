@@ -23,6 +23,7 @@ setup(
         ],
     keywords='queue boost',
     author='Stephan Hofmockel',
+    author_email="Use the github issues",
     url='https://github.com/stephan-hof/boost_queue',
     license='boost',
     packages=['tests'],
