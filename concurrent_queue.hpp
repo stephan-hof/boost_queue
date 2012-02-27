@@ -21,7 +21,7 @@ class NoMoreTasks : public std::exception {};
 
 template<typename T>
 class ConcurrentQueue {
-    protected:
+    private:
         boost::mutex mutex;
         std::deque<T> queue;
         boost::condition_variable empty_cond;
@@ -97,7 +97,7 @@ ConcurrentQueue<T>::put(T &item, bool block, boost::uint64_t timeout)
     lock.unlock();
     this->empty_cond.notify_one();
 }
- 
+
 template<typename T>
 void
 ConcurrentQueue<T>::pop(T & item, bool block, boost::uint64_t timeout)

@@ -6,13 +6,32 @@
 */
 
 #include "Python.h"
+
 #include <exception>
 #include <deque>
-#include <limits>
-#include <ctime>
 #include <boost/cstdint.hpp>
+#include <boost/date_time/posix_time/posix_time_types.hpp>
+#include <boost/thread/condition_variable.hpp>
 #include <boost/thread/mutex.hpp>
-#include "concurrent_queue.hpp"
+#include <boost/thread/thread_time.hpp>
+#include <boost/foreach.hpp>
+
+/* Macro to wrap c++ exceptions into python ones */
+#define BEGIN_SAFE_CALL try {
+#define END_SAFE_CALL(error_txt1, ret_val) } \
+    catch (std::exception &e) { \
+        PyErr_Format(PyExc_Exception, error_txt1, e.what()); return ret_val;} \
+    catch (...) { \
+        PyErr_Format(PyExc_Exception, error_txt1, "unkown error"); return ret_val;}
+
+/* Helper class to get or release the GIL in a exception safe manner */
+class AllowThreads {
+    private:
+        PyThreadState *_save;
+    public:
+        AllowThreads(){Py_UNBLOCK_THREADS}
+        ~AllowThreads(){Py_BLOCK_THREADS}
+};
 
 static const char *put_kwlist[] = {"item", "block", "timeout", NULL};
 static const char *get_kwlist[] = {"block", "timeout", NULL};
@@ -20,51 +39,32 @@ static const char *get_kwlist[] = {"block", "timeout", NULL};
 static PyObject * EmptyError;
 static PyObject * FullError;
 
-class PyObjectQueue: public ConcurrentQueue<PyObject*>{
+class Bridge {
     public:
-        PyObjectQueue(long &);
-        int py_traverse(visitproc visit, void *arg);
-        int py_clear();
+        boost::mutex mutex;
+        boost::condition_variable empty_cond;
+        boost::condition_variable full_cond;
+        boost::condition_variable all_tasks_done_cond;
+        std::deque<PyObject*> queue;
 };
 
-PyObjectQueue::PyObjectQueue(long &maxsize): ConcurrentQueue<PyObject*>(maxsize) {}
-
-int
-PyObjectQueue::py_traverse(visitproc visit, void *arg)
-{
-    boost::lock_guard<boost::mutex> raii_lock(this->mutex);
-
-    std::deque<PyObject*>::iterator iter;
-    for (iter = this->queue.begin(); iter != this->queue.end(); iter++) {
-        Py_VISIT((*iter));
-    }
-    return 0;
-}
-
-int
-PyObjectQueue::py_clear()
-{
-    boost::lock_guard<boost::mutex> raii_lock(this->mutex);
-
-    std::deque<PyObject*>::iterator iter;
-    for (iter = this->queue.begin(); iter != this->queue.end(); iter++) {
-        Py_CLEAR((*iter));
-    }
-    return 0;
-}
-typedef struct 
-{
+typedef struct {
     PyObject_HEAD
-    PyObjectQueue *queue;
-
+    Bridge *bridge;
+    size_t maxsize;
+    boost::uint64_t unfinished_tasks;
 } Queue;
+
 
 static PyObject *
 Queue_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
 {
     Queue *self;
     self = reinterpret_cast<Queue*> (type->tp_alloc(type, 0));
-    self->queue = NULL;
+    self->bridge = NULL;
+    self->unfinished_tasks = 0;
+    self->maxsize = 0;
+
     return reinterpret_cast<PyObject*>(self);
 }
 
@@ -75,52 +75,47 @@ Queue_init(Queue *self, PyObject *args, PyObject *kwargs)
     if(!PyArg_ParseTuple(args, "|l", &maxsize))
         return -1;
 
-    try {
-        self->queue = new PyObjectQueue(maxsize);
+    if (maxsize < 0) {
+        self->maxsize = 0;
     }
-    catch (std::exception &e) {
-        PyErr_Format(
-            PyExc_Exception,
-            "Error while creating underlying queue: %s", e.what());
-        return -1;
+    else {
+        self->maxsize = maxsize;
     }
-    catch (...) {
-        PyErr_Format(PyExc_Exception, "Unkown error while creating queue");
-        return -1;
-    }
+
+    BEGIN_SAFE_CALL
+        self->bridge = new Bridge();
+    END_SAFE_CALL("Error Creating underlying queue: %s", -1)
     return 0;
 }
 
 static int
 Queue_traverse(Queue *self, visitproc visit, void *arg)
 {
-    try {
-        return self->queue->py_traverse(visit, arg);
-    }
-    catch (...) {
-        PyErr_Format(PyExc_Exception, "Error while traversing");
-        return -1;
-    }
+    BEGIN_SAFE_CALL
+        BOOST_FOREACH(PyObject* entry, self->bridge->queue) {
+            Py_VISIT(entry);
+        }
+    END_SAFE_CALL("Error while traversing: %s", -1)
+    return 0;
 }
 
 static int
 Queue_clear(Queue *self)
 {
-    try {
-        return self->queue->py_clear();
-    }
-    catch (...) {
-        PyErr_Format(PyExc_Exception, "Error while clear");
-        return -1;
-    }
+    BEGIN_SAFE_CALL
+        BOOST_FOREACH(PyObject* entry, self->bridge->queue) {
+            Py_CLEAR(entry);
+        }
+    END_SAFE_CALL("Error while clear: %s", -1)
+    return 0;
 }
 
 static void
 Queue_dealloc(Queue *self)
 {
-    if (self->queue) {
+    if (self->bridge) {
         Queue_clear(self);
-        delete self->queue;
+        delete self->bridge;
     }
     self->ob_type->tp_free(reinterpret_cast<PyObject*>(self));
 }
@@ -167,33 +162,74 @@ _parse_block_and_timeout(
     return 1;
 }
 
-static PyObject *
+static void
+_wait_for_lock(boost::mutex::scoped_lock& lock)
+{
+    AllowThreads raii_lock;
+    lock.lock();
+}
+
+static void
+_blocked_wait_full(Bridge* bridge, boost::mutex::scoped_lock& lock)
+{
+    AllowThreads raii_lock;
+    bridge->full_cond.wait(lock);
+}
+
+static bool
+_timed_wait_full(
+        Bridge* bridge,
+        boost::mutex::scoped_lock& lock,
+        boost::system_time& timeout)
+{
+    AllowThreads raii_lock;
+    return bridge->full_cond.timed_wait(lock, timeout);
+}
+
+static PyObject*
 _internal_put(Queue *self, PyObject *item, bool block, double timeout)
 {
-    PyThreadState * _save;
-    Py_UNBLOCK_THREADS
-    try {
-        self->queue->put(
-            item,
-            block,
-            static_cast<boost::uint64_t>(timeout*1000));
+    BEGIN_SAFE_CALL
 
-        Py_BLOCK_THREADS
-        Py_INCREF(item);
-        Py_RETURN_NONE;
+    boost::mutex::scoped_lock lock(self->bridge->mutex, boost::try_to_lock);
+    if (not lock.owns_lock()) {
+        _wait_for_lock(lock);
     }
-    catch (QueueFull &e) {
-        Py_BLOCK_THREADS
+
+    boost::uint64_t timeout_millis = static_cast<boost::uint64_t>(timeout*1000);
+    std::deque<PyObject*>& queue = self->bridge->queue;
+
+    if ((queue.size() < self->maxsize) or (self->maxsize == 0)) {
+        /* Fall through the end of method */
+    }
+    else if (not block) {
         return PyErr_Format(FullError, "Queue Full");
     }
-    catch (std::exception &e) {
-        Py_BLOCK_THREADS
-        return PyErr_Format(PyExc_Exception, "Error in put: %s", e.what());
+    else {
+        if (timeout > 0) {
+            boost::system_time abs_timeout = boost::get_system_time();
+            abs_timeout += boost::posix_time::milliseconds(timeout_millis);
+            while (queue.size() == self->maxsize) {
+                if (not _timed_wait_full(self->bridge, lock, abs_timeout)) {
+                    return PyErr_Format(FullError, "Queue Full");
+                }
+            }
+        }
+        else {
+            while (queue.size() == self->maxsize) {
+                _blocked_wait_full(self->bridge, lock);
+            }
+        }
     }
-    catch (...) {
-        Py_BLOCK_THREADS
-        return PyErr_Format(PyExc_Exception, "Unkown error in put");
-    }
+
+    queue.push_back(item);
+    Py_INCREF(item);
+
+    self->unfinished_tasks += 1;
+    self->bridge->empty_cond.notify_all();
+
+    END_SAFE_CALL("Error in put: %s", NULL)
+    Py_RETURN_NONE;
 }
 
 static PyObject*
@@ -225,34 +261,65 @@ Queue_put(Queue *self, PyObject *args, PyObject *kwargs)
     return _internal_put(self, item, block, timeout);
 }
 
+static void
+_blocked_wait_empty(Bridge* bridge, boost::mutex::scoped_lock& lock)
+{
+    AllowThreads raii_lock;
+    bridge->empty_cond.wait(lock);
+}
+
+static bool
+_timed_wait_empty(
+        Bridge* bridge,
+        boost::mutex::scoped_lock& lock,
+        boost::system_time& timeout)
+{
+    AllowThreads raii_lock;
+    return bridge->empty_cond.timed_wait(lock, timeout);
+}
+
 static PyObject*
 _internal_get(Queue *self, bool block, double timeout)
 {
-    PyObject * ret_item;
-    PyThreadState * _save;
-    Py_UNBLOCK_THREADS
-    try {
-        self->queue->pop(
-                ret_item,
-                block,
-                static_cast<boost::uint64_t>(timeout*1000));
+    BEGIN_SAFE_CALL
 
-        Py_BLOCK_THREADS
-        Py_INCREF(ret_item);
-        return ret_item;
+    boost::mutex::scoped_lock lock(self->bridge->mutex, boost::try_to_lock);
+    if (not lock.owns_lock()) {
+        _wait_for_lock(lock);
     }
-    catch (QueueEmpty &e) {
-        Py_BLOCK_THREADS
+
+    boost::uint64_t timeout_millis = static_cast<boost::uint64_t>(timeout*1000);
+    std::deque<PyObject*>& queue = self->bridge->queue;
+
+    if (not queue.empty()) {
+        /* Fall through the end of method */
+    }
+    else if (not block) {
         return PyErr_Format(EmptyError, "Queue Empty");
     }
-    catch (std::exception &e) {
-        Py_BLOCK_THREADS
-        return PyErr_Format(PyExc_Exception, "Error in get: %s", e.what());
+    else {
+        if (timeout > 0) {
+            boost::system_time abs_timeout = boost::get_system_time();
+            abs_timeout += boost::posix_time::milliseconds(timeout_millis);
+            while (queue.empty()) {
+                if (not _timed_wait_empty(self->bridge, lock, abs_timeout)) {
+                    return PyErr_Format(EmptyError, "Queue Empty");
+                }
+            }
+        }
+        else {
+            while (queue.empty()) {
+                _blocked_wait_empty(self->bridge, lock);
+            }
+        }
     }
-    catch (...) {
-        Py_BLOCK_THREADS
-        return PyErr_Format(PyExc_Exception, "Unkown error in get");
-    }
+
+    PyObject *item = queue.front();
+    queue.pop_front();
+    self->bridge->full_cond.notify_all();
+    return item;
+
+    END_SAFE_CALL("Error in get: %s", NULL)
 }
 
 static PyObject*
@@ -286,13 +353,13 @@ Queue_get(Queue *self, PyObject *args, PyObject *kwargs)
 static PyObject*
 Queue_qsize(Queue *self)
 {
-    return PyLong_FromSize_t(self->queue->size());
+    return PyLong_FromSize_t(self->bridge->queue.size());
 }
 
 static PyObject*
 Queue_empty(Queue *self)
 {
-    if (self->queue->size() == 0) {
+    if (self->bridge->queue.size() == 0) {
         Py_RETURN_TRUE;
     }
     Py_RETURN_FALSE;
@@ -301,10 +368,11 @@ Queue_empty(Queue *self)
 static PyObject*
 Queue_full(Queue *self)
 {
-    if (self->queue->get_maxsize() == 0) {
+    if (self->maxsize == 0) {
         Py_RETURN_FALSE;
     }
-    if (self->queue->size() < self->queue->get_maxsize()) {
+
+    if (self->bridge->queue.size() < self->maxsize) {
         Py_RETURN_FALSE;
     }
     Py_RETURN_TRUE;
@@ -325,53 +393,49 @@ Queue_get_nowait(Queue *self)
 static PyObject*
 Queue_task_done(Queue *self)
 {
-    
-    PyThreadState * _save;
-    Py_UNBLOCK_THREADS
+    BEGIN_SAFE_CALL
 
-    try {
-        self->queue->task_done(); 
-
-        Py_BLOCK_THREADS
-        Py_RETURN_NONE;
+    boost::mutex::scoped_lock lock(self->bridge->mutex, boost::try_to_lock);
+    if (not lock.owns_lock()) {
+        _wait_for_lock(lock);
     }
-    catch (NoMoreTasks &e) {
-        Py_BLOCK_THREADS
+
+    if (self->unfinished_tasks == 0) {
         return PyErr_Format(
                     PyExc_ValueError, "task_done() called too many times");
     }
-    catch (std::exception &e) {
-        Py_BLOCK_THREADS
-        return PyErr_Format(
-                    PyExc_Exception, "Error in task_done: %s", e.what());
+
+    if (--self->unfinished_tasks == 0) {
+        self->bridge->all_tasks_done_cond.notify_all();
     }
-    catch (...) {
-        Py_BLOCK_THREADS
-        return PyErr_Format(PyExc_Exception, "Unkown error in task_done");
-    }
+
+    END_SAFE_CALL("Error in task done: %s", NULL)
+    Py_RETURN_NONE;
+}
+
+static void
+_blocked_wait_all_tasks_done(Queue* self, boost::mutex::scoped_lock& lock)
+{
+    AllowThreads raii_lock;
+    self->bridge->all_tasks_done_cond.wait(lock);
 }
 
 static PyObject*
-Queue_join(Queue *self)
+Queue_join(Queue* self)
 {
-    
-    PyThreadState * _save;
-    Py_UNBLOCK_THREADS
+    BEGIN_SAFE_CALL
 
-    try {
-        self->queue->join(); 
+    boost::mutex::scoped_lock lock(self->bridge->mutex, boost::try_to_lock);
+    if (not lock.owns_lock()) {
+        _wait_for_lock(lock);
+    }
 
-        Py_BLOCK_THREADS
-        Py_RETURN_NONE;
+    while (self->unfinished_tasks) {
+        _blocked_wait_all_tasks_done(self, lock);
     }
-    catch (std::exception &e) {
-        Py_BLOCK_THREADS
-        return PyErr_Format(PyExc_Exception, "Error in join: %s", e.what());
-    }
-    catch (...) {
-        Py_BLOCK_THREADS
-        return PyErr_Format(PyExc_Exception, "Unkown error in join");
-    }
+
+    END_SAFE_CALL("Error in join: %s", NULL)
+    Py_RETURN_NONE;
 }
 
 static PyMethodDef Queue_methods[] = {
@@ -390,7 +454,7 @@ static PyMethodDef Queue_methods[] = {
 static PyObject *
 Queue_maxsize_get(Queue *self, void *closure)
 {
-    return PyLong_FromSize_t(self->queue->get_maxsize());
+    return PyLong_FromSize_t(self->maxsize);
 }
 
 static PyGetSetDef Queue_getsets[] = {
