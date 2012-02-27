@@ -442,7 +442,10 @@ static PyTypeObject QueueType = {
 
 PyMODINIT_FUNC
 initboost_queue(void){
-    PyObject *module;
+    PyObject* module;
+    PyObject* std_lib_queue;
+    PyObject* std_empty;
+    PyObject* std_full;
 
     if (PyType_Ready(&QueueType) < 0) {
         return;
@@ -453,10 +456,33 @@ initboost_queue(void){
         return;
     }
 
+    if((std_lib_queue = PyImport_ImportModule("Queue")) == NULL) {
+        return;
+    }
+
+    if((std_empty = PyObject_GetAttrString(std_lib_queue, "Empty")) == NULL) {
+        Py_DECREF(std_lib_queue);
+    }
+
+    if((std_full = PyObject_GetAttrString(std_lib_queue, "Full")) == NULL) {
+        Py_DECREF(std_lib_queue);
+        Py_DECREF(std_empty);
+    }
+
+
     EmptyError = PyErr_NewException(
-                            const_cast<char*>("boost_queue.Empty"), NULL, NULL);
+                            const_cast<char*>("boost_queue.Empty"),
+                            std_empty,
+                            NULL);
+
     FullError = PyErr_NewException(
-                            const_cast<char*>("boost_queue.Full"), NULL, NULL);
+                            const_cast<char*>("boost_queue.Full"),
+                            std_full,
+                            NULL);
+
+    Py_DECREF(std_lib_queue);
+    Py_DECREF(std_empty);
+    Py_DECREF(std_full);
 
     PyModule_AddObject(module, "Empty", EmptyError);
     PyModule_AddObject(module, "Full", FullError);

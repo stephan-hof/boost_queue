@@ -6,6 +6,8 @@ from boost_queue import Queue
 from boost_queue import Full
 from boost_queue import Empty
 
+import Queue as std_queue
+
 class TestQueue(TestCase):
     def test_put(self):
         return
@@ -112,3 +114,20 @@ class TestQueue(TestCase):
 
         with self.assertRaises(ValueError):
             q.put('data', True, -1)
+
+    def test_except_with_std_queue_full(self):
+        q = Queue(1)
+        q.put(1)
+        with self.assertRaises(std_queue.Full):
+            q.put(1, block=False)
+
+        with self.assertRaises(Full):
+            q.put(1, block=False)
+
+    def test_except_with_std_queue_empty(self):
+        q = Queue(1)
+        with self.assertRaises(std_queue.Empty):
+            q.get(block=False)
+
+        with self.assertRaises(Empty):
+            q.get(block=False)
