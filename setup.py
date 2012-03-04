@@ -6,12 +6,11 @@ mod = Extension(
         sources=['boost_queue.cpp'],
         libraries=['boost_thread', 'boost_date_time'],
         extra_compile_args=["-O2"],
-        depends=['concurrent_queue.hpp']
         )
 
 setup(
     name='boost_queue',
-    version='0.2',
+    version='0.3',
     description="Queue using boost's locking API",
     long_description=open('README.rst').read(),
     classifiers=[

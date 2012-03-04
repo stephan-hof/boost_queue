@@ -12,6 +12,15 @@ concurrent_queue.hpp contains the Python independent C++ Queue
 Changelog
 =========
 
+0.3 - March 03, 2012
+--------------------
+
+* Fix a memory leak
+* Release the GIL less often. Now the GIL is only released if the queue needs to wait.
+  In the versions before the GIL was released on *every* get/put operation which led
+  to a lot of unneeded context switches. This change leads to a significant
+  performance improvement if you work heavily on the queue.
+
 0.2 - February 27, 2012
 -----------------------
 
