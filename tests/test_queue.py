@@ -10,25 +10,21 @@ import Queue as std_queue
 
 class TestQueue(TestCase):
     def test_put(self):
-        return
         q = Queue(1)
         q.put(None)
 
     def test_put_with_full_error(self):
-        return
         q = Queue(1)
         q.put(None)
         with self.assertRaises(Full):
             q.put(None, True, 2.1)
 
     def test_get_with_empty_error(self):
-        return
         q = Queue(1)
         with self.assertRaises(Empty):
             q.get(1, 0.1)
 
     def test_get_put(self):
-        return
         q = Queue(2)
         q.put(1, 1)
         q.put(2, 1)
@@ -43,7 +39,6 @@ class TestQueue(TestCase):
             q.get(1, 1)
 
     def test_get_put_with_thread_and_late_get(self):
-        return
         def producer(q):
             [q.put(x, True, 0.1) for x in range(400)]
 
@@ -63,7 +58,6 @@ class TestQueue(TestCase):
         t2.join()
 
     def test_get_put_with_thread_and_late_put(self):
-        return
         def consumer(test, q):
             to_consume = range(40)
             for x in range(40):

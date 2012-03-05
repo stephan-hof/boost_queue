@@ -149,8 +149,12 @@ class BaseQueueTest(unittest.TestCase, BlockingTestMixin):
 
     def queue_join_test(self, q):
         self.cum = 0
+        threads = []
         for i in (0,1):
-            threading.Thread(target=self.worker, args=(q,)).start()
+            t = threading.Thread(target=self.worker, args=(q,))
+            t.start()
+            threads.append(t)
+
         for i in xrange(100):
             q.put(i)
         q.join()
@@ -159,6 +163,7 @@ class BaseQueueTest(unittest.TestCase, BlockingTestMixin):
         for i in (0,1):
             q.put(None)         # instruct the threads to close
         q.join()                # verify that you can join twice
+        [x.join() for x in threads]
 
     def test_queue_task_done(self):
         # Test to make sure a queue task completed successfully.
