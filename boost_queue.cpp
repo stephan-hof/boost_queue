@@ -186,6 +186,44 @@ _timed_wait_full(
     return bridge->full_cond.timed_wait(lock, timeout);
 }
 
+static bool
+_wait_for_free_slots(
+        Queue *self,
+        bool block,
+        double timeout,
+        boost::mutex::scoped_lock& lock,
+        Py_ssize_t nb_of_items)
+{
+    boost::uint64_t timeout_millis = static_cast<boost::uint64_t>(timeout*1000);
+
+    if(self->maxsize == 0) {
+        /* Fall through the end of method */
+    }
+    else if((self->maxsize - self->bridge->queue.size()) >= nb_of_items) {
+        /* Fall through the end of method */
+    }
+    else if (not block) {
+        PyErr_Format(FullError, "Queue Full");
+        return false;
+    }
+    else if (timeout > 0) {
+        boost::system_time abs_timeout = boost::get_system_time();
+        abs_timeout += boost::posix_time::milliseconds(timeout_millis);
+        while (!((self->maxsize - self->bridge->queue.size()) >= nb_of_items)) {
+            if (not _timed_wait_full(self->bridge, lock, abs_timeout)) {
+                PyErr_Format(FullError, "Queue Full");
+                return false;
+            }
+        }
+    }
+    else {
+        while (!((self->maxsize - self->bridge->queue.size()) >= nb_of_items)) {
+            _blocked_wait_full(self->bridge, lock);
+        }
+    }
+    return true;
+}
+
 static PyObject*
 _internal_put(Queue *self, PyObject *item, bool block, double timeout)
 {
@@ -196,33 +234,11 @@ _internal_put(Queue *self, PyObject *item, bool block, double timeout)
         _wait_for_lock(lock);
     }
 
-    boost::uint64_t timeout_millis = static_cast<boost::uint64_t>(timeout*1000);
-    std::deque<PyObject*>& queue = self->bridge->queue;
-
-    if ((queue.size() < self->maxsize) or (self->maxsize == 0)) {
-        /* Fall through the end of method */
-    }
-    else if (not block) {
-        return PyErr_Format(FullError, "Queue Full");
-    }
-    else {
-        if (timeout > 0) {
-            boost::system_time abs_timeout = boost::get_system_time();
-            abs_timeout += boost::posix_time::milliseconds(timeout_millis);
-            while (queue.size() == self->maxsize) {
-                if (not _timed_wait_full(self->bridge, lock, abs_timeout)) {
-                    return PyErr_Format(FullError, "Queue Full");
-                }
-            }
-        }
-        else {
-            while (queue.size() == self->maxsize) {
-                _blocked_wait_full(self->bridge, lock);
-            }
-        }
+    if (not _wait_for_free_slots(self, block, timeout, lock, 1)) {
+        return NULL;
     }
 
-    queue.push_back(item);
+    self->bridge->queue.push_back(item);
     Py_INCREF(item);
 
     self->unfinished_tasks += 1;
@@ -278,6 +294,41 @@ _timed_wait_empty(
     return bridge->empty_cond.timed_wait(lock, timeout);
 }
 
+static bool
+_wait_for_items(
+        Queue *self,
+        bool block,
+        double timeout,
+        boost::mutex::scoped_lock& lock,
+        long int items_len)
+{
+    boost::uint64_t timeout_millis = static_cast<boost::uint64_t>(timeout*1000);
+
+    if (self->bridge->queue.size() >= items_len) {
+        /* Fall through the end of method */
+    }
+    else if (not block) {
+        PyErr_Format(EmptyError, "Queue Empty");
+        return false;
+    }
+    else if (timeout > 0) {
+        boost::system_time abs_timeout = boost::get_system_time();
+        abs_timeout += boost::posix_time::milliseconds(timeout_millis);
+        while (not self->bridge->queue.size() >= items_len) {
+            if (not _timed_wait_empty(self->bridge, lock, abs_timeout)) {
+                PyErr_Format(EmptyError, "Queue Empty");
+                return false;
+            }
+        }
+    }
+    else {
+        while (not (self->bridge->queue.size() >= items_len)) {
+            _blocked_wait_empty(self->bridge, lock);
+        }
+    }
+    return true;
+}
+
 static PyObject*
 _internal_get(Queue *self, bool block, double timeout)
 {
@@ -288,34 +339,12 @@ _internal_get(Queue *self, bool block, double timeout)
         _wait_for_lock(lock);
     }
 
-    boost::uint64_t timeout_millis = static_cast<boost::uint64_t>(timeout*1000);
-    std::deque<PyObject*>& queue = self->bridge->queue;
-
-    if (not queue.empty()) {
-        /* Fall through the end of method */
-    }
-    else if (not block) {
-        return PyErr_Format(EmptyError, "Queue Empty");
-    }
-    else {
-        if (timeout > 0) {
-            boost::system_time abs_timeout = boost::get_system_time();
-            abs_timeout += boost::posix_time::milliseconds(timeout_millis);
-            while (queue.empty()) {
-                if (not _timed_wait_empty(self->bridge, lock, abs_timeout)) {
-                    return PyErr_Format(EmptyError, "Queue Empty");
-                }
-            }
-        }
-        else {
-            while (queue.empty()) {
-                _blocked_wait_empty(self->bridge, lock);
-            }
-        }
+    if (not _wait_for_items(self, block, timeout, lock, 1)) {
+        return NULL;
     }
 
-    PyObject *item = queue.front();
-    queue.pop_front();
+    PyObject *item = self->bridge->queue.front();
+    self->bridge->queue.pop_front();
     self->bridge->full_cond.notify_all();
     return item;
 
