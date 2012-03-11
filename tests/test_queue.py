@@ -125,3 +125,40 @@ class TestQueue(TestCase):
 
         with self.assertRaises(Empty):
             q.get(block=False)
+
+    def test_put_many_too_many_items(self):
+        q = Queue(1)
+        msg = "items of size 3 is bigger then maxsize: 1"
+        with self.assertRaisesRegexp(ValueError, msg):
+                q.put_many((1, 2, 3))
+
+        q.put(None)
+        with self.assertRaises(Full):
+            q.put_many([1], block=False)
+
+    def test_put_many_enough_space(self):
+        q = Queue(10)
+        q.put_many((1, 2, 3))
+
+        self.assertEqual(3, q.qsize())
+        self.assertEqual(1, q.get())
+        self.assertEqual(2, q.get())
+        self.assertEqual(3, q.get())
+
+    def test_get_many_enough_space(self):
+        q = Queue(10)
+        q.put_many((1, 2, 3))
+        q.put_many((1, 2, 3))
+
+        self.assertEqual((1, 2), q.get_many(2))
+        self.assertEqual((3, 1), q.get_many(2))
+        self.assertEqual((2, 3), q.get_many(2))
+
+    def test_get_many_not_enough_space(self):
+        q = Queue(10)
+        msg = "you want to get 12 but maxsize is 10"
+        with self.assertRaisesRegexp(ValueError, msg):
+            q.get_many(12)
+
+        with self.assertRaises(Empty):
+            q.get_many(2, block=False)

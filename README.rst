@@ -7,10 +7,31 @@ Python-2.X Queue.Queue uses a busy loop in case of a blocking operation.
 This queue implementation uses condition variables from Boost to avoid the busy
 loop.
 
-concurrent_queue.hpp contains the Python independent C++ Queue
+boost_queue provides two methods not supported by the Queue from the stdlib.
+
+put_many(items, block=True, timeout=None)
+Instead of pushing a single item a list of items is pushed to the Queue atomicly.
+'items' needs to support __len__ and __iter__ for this call.
+If block equals 'True' the call blocks until enough free space is available to
+put all items at once.
+
+get_many(items, block=True, timeout=None)
+Instead of returning a single item a tuple of items is returned atomicly.
+Whereas 'items' is the  number of items this tuple should contain.
+If block equals 'True' the call blocks until enough items are in the Queue.
+
+The main usage of this calls are applications where the Queue is heavily used.
+
+concurrent_queue.hpp contains a Python independent C++ Queue.
 
 Changelog
 =========
+
+0.4 - March 14, 2012
+--------------------
+
+* add a get_many method
+* add a put_many method
 
 0.3 - March 03, 2012
 --------------------

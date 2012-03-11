@@ -16,6 +16,14 @@
 #include <boost/thread/thread_time.hpp>
 #include <boost/foreach.hpp>
 
+/* get_many considarations:
+ * Avoid using get_many() on the consumer side and using put() on the producer.
+ * The get_many() thread is notified on every single put(), however immediatly
+ * goes to sleep again because the Queue is not big enought. Hence a lot of
+ * context switches for nothing. So it is recommended to use get_many() and
+ * put_many() together with the same size of items.
+ */
+
 /* Macro to wrap c++ exceptions into python ones */
 #define BEGIN_SAFE_CALL try {
 #define END_SAFE_CALL(error_txt1, ret_val) } \
@@ -34,7 +42,10 @@ class AllowThreads {
 };
 
 static const char *put_kwlist[] = {"item", "block", "timeout", NULL};
+static const char *put_many_kwlist[] = {"items", "block", "timeout", NULL};
 static const char *get_kwlist[] = {"block", "timeout", NULL};
+static const char *get_many_kwlist[] = {"items", "block", "timeout", NULL};
+
 
 static PyObject * EmptyError;
 static PyObject * FullError;
@@ -277,6 +288,92 @@ Queue_put(Queue *self, PyObject *args, PyObject *kwargs)
     return _internal_put(self, item, block, timeout);
 }
 
+static PyObject*
+Queue_put_many(Queue *self, PyObject *args, PyObject *kwargs)
+{
+    PyObject *items;
+
+    PyObject *py_block=NULL;
+    bool block=true;
+
+    PyObject *py_timeout=NULL;
+    double timeout = 0;
+
+    PyObject *iterator=NULL;
+    PyObject *itertor_item=NULL;
+    Py_ssize_t items_len;
+
+    if (not PyArg_ParseTupleAndKeywords(
+                                args,
+                                kwargs,
+                                "O|OO:put",
+                                const_cast<char**>(put_many_kwlist),
+                                &items,
+                                &py_block,
+                                &py_timeout))
+    {
+        return NULL;
+    }
+
+    if (_parse_block_and_timeout(py_block, py_timeout, block, timeout) == -1) {
+        return NULL;
+    }
+
+    if ((items_len = PyObject_Length(items)) == -1) {
+        return NULL;
+    }
+
+    if (items_len == 0) {
+        Py_RETURN_NONE;
+    }
+
+    /* Can happen if items is a custom object overloading __len__ */
+    if (items_len < 0) {
+        return PyErr_Format(
+                PyExc_ValueError,
+                "len of items is smaller 0: %i",
+                items_len);
+    }
+
+    if (self->maxsize > 0 and items_len > self->maxsize) {
+        return PyErr_Format(
+                    PyExc_ValueError,
+                    "items of size %i is bigger then maxsize: %i",
+                    items_len,
+                    self->maxsize);
+    }
+
+    BEGIN_SAFE_CALL
+
+    boost::mutex::scoped_lock lock(self->bridge->mutex, boost::try_to_lock);
+    if (not lock.owns_lock()) {
+        _wait_for_lock(lock);
+    }
+
+    if (not _wait_for_free_slots(self, block, timeout, lock, items_len)) {
+        return NULL;
+    }
+
+    if ((iterator = PyObject_GetIter(items)) == NULL) {
+        return NULL;
+    }
+
+    while (itertor_item = PyIter_Next(iterator)) {
+        self->bridge->queue.push_back(itertor_item);
+        self->unfinished_tasks += 1;
+
+    }
+    self->bridge->empty_cond.notify_all();
+    Py_DECREF(iterator);
+
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+
+    END_SAFE_CALL("Error in put_many: %s", NULL)
+    Py_RETURN_NONE;
+}
+
 static void
 _blocked_wait_empty(Bridge* bridge, boost::mutex::scoped_lock& lock)
 {
@@ -378,6 +475,83 @@ Queue_get(Queue *self, PyObject *args, PyObject *kwargs)
     return _internal_get(self, block, timeout);
 }
 
+static PyObject*
+Queue_get_many(Queue *self, PyObject *args, PyObject *kwargs)
+{
+
+    PyObject *py_block=NULL;
+    PyObject *py_timeout=NULL;
+    PyObject *result_tuple=NULL;
+
+    bool block=true;
+    double timeout = 0;
+    long int items=0;
+
+    if(not PyArg_ParseTupleAndKeywords(
+                                args,
+                                kwargs,
+                                "l|OO:get",
+                                const_cast<char**>(get_many_kwlist),
+                                &items,
+                                &py_block,
+                                &py_timeout))
+    {
+        return NULL;
+    }
+
+    if (_parse_block_and_timeout(py_block, py_timeout, block, timeout) == -1) {
+        return NULL;
+    }
+
+    if (items == 0) {
+        return PyTuple_New(0);
+    }
+
+    if (items < 0) {
+        return PyErr_Format(
+                PyExc_ValueError,
+                "items must be greater or equal 0 but it is: %ld",
+                items);
+    }
+
+
+    if (self->maxsize > 0 and items > self->maxsize) {
+        return PyErr_Format(
+                PyExc_ValueError,
+                "you want to get %ld but maxsize is %i",
+                items,
+                self->maxsize);
+    }
+
+    if ((result_tuple = PyTuple_New(items)) == NULL) {
+        return NULL;
+    }
+
+    BEGIN_SAFE_CALL
+
+    boost::mutex::scoped_lock lock(self->bridge->mutex, boost::try_to_lock);
+    if (not lock.owns_lock()) {
+        _wait_for_lock(lock);
+    }
+
+    if (not _wait_for_items(self, block, timeout, lock, items)) {
+        return NULL;
+    }
+
+    for (long int i=0; i<items; i++) {
+        PyObject *item = self->bridge->queue.front();
+        Py_INCREF(item);
+        PyTuple_SET_ITEM(result_tuple, i, item);
+
+        self->bridge->queue.pop_front();
+    }
+
+    self->bridge->full_cond.notify_all();
+    return result_tuple;
+
+
+    END_SAFE_CALL("Error in get_many: %s", NULL)
+}
 
 static PyObject*
 Queue_qsize(Queue *self)
@@ -475,6 +649,8 @@ static PyMethodDef Queue_methods[] = {
     {"full", (PyCFunction)Queue_full, METH_NOARGS, ""},
     {"put_nowait", (PyCFunction)Queue_put_nowait, METH_O, ""},
     {"get_nowait", (PyCFunction)Queue_get_nowait, METH_NOARGS, ""},
+    {"put_many", (PyCFunction)Queue_put_many, METH_VARARGS|METH_KEYWORDS, ""},
+    {"get_many", (PyCFunction)Queue_get_many, METH_VARARGS|METH_KEYWORDS, ""},
     {"task_done", (PyCFunction)Queue_task_done, METH_NOARGS, ""},
     {"join", (PyCFunction)Queue_join, METH_NOARGS, ""},
     {NULL, NULL, 0, NULL}
