@@ -8,6 +8,7 @@ from boost_queue import Empty
 
 import Queue as std_queue
 
+
 class TestQueue(TestCase):
     def test_put(self):
         q = Queue(1)
@@ -46,7 +47,6 @@ class TestQueue(TestCase):
             for x in range(400):
                 self.assertEqual(x, q.get(True, 0.1))
 
-
         queue = Queue(400)
         t1 = threading.Thread(target=producer, args=(queue,))
         t1.start()
@@ -80,10 +80,10 @@ class TestQueue(TestCase):
 
     def test_unrealistic_max_size(self):
         with self.assertRaises(OverflowError):
-            Queue(2**72)
+            Queue(2 ** 72)
 
         with self.assertRaises(OverflowError):
-            Queue(-2**72)
+            Queue(-2 ** 72)
 
     def test_negative_max_size(self):
         q = Queue(-1000)
@@ -96,10 +96,10 @@ class TestQueue(TestCase):
     def test_unrealistic_timeout(self):
         q = Queue()
         with self.assertRaises(OverflowError):
-            q.get(True, 2**72)
+            q.get(True, 2 ** 72)
 
         with self.assertRaises(OverflowError):
-            q.put(1, True, 2**72)
+            q.put(1, True, 2 ** 72)
 
     def test_negative_timeout(self):
         q = Queue()
