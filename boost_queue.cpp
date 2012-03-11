@@ -242,7 +242,7 @@ _internal_put(Queue *self, PyObject *item, bool block, double timeout)
     Py_INCREF(item);
 
     self->unfinished_tasks += 1;
-    self->bridge->empty_cond.notify_all();
+    self->bridge->empty_cond.notify_one();
 
     END_SAFE_CALL("Error in put: %s", NULL)
     Py_RETURN_NONE;
@@ -345,7 +345,7 @@ _internal_get(Queue *self, bool block, double timeout)
 
     PyObject *item = self->bridge->queue.front();
     self->bridge->queue.pop_front();
-    self->bridge->full_cond.notify_all();
+    self->bridge->full_cond.notify_one();
     return item;
 
     END_SAFE_CALL("Error in get: %s", NULL)
