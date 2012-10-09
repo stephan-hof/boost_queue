@@ -27,6 +27,12 @@ concurrent_queue.hpp contains a Python independent C++ Queue.
 Changelog
 =========
 
+0.4.1 - October 09, 2012
+------------------------
+
+* Fix memory leak in get_many
+* Fix segfault if block and timeout are used
+
 0.4 - March 14, 2012
 --------------------
 
