@@ -540,7 +540,6 @@ Queue_get_many(Queue *self, PyObject *args, PyObject *kwargs)
 
     for (long int i=0; i<items; i++) {
         PyObject *item = self->bridge->queue.front();
-        Py_INCREF(item);
         PyTuple_SET_ITEM(result_tuple, i, item);
 
         self->bridge->queue.pop_front();
