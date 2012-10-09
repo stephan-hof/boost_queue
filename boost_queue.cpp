@@ -411,7 +411,7 @@ _wait_for_items(
     else if (timeout > 0) {
         boost::system_time abs_timeout = boost::get_system_time();
         abs_timeout += boost::posix_time::milliseconds(timeout_millis);
-        while (not self->bridge->queue.size() >= items_len) {
+        while (not (self->bridge->queue.size() >= items_len)) {
             if (not _timed_wait_empty(self->bridge, lock, abs_timeout)) {
                 PyErr_Format(EmptyError, "Queue Empty");
                 return false;
