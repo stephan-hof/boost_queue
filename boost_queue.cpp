@@ -19,7 +19,7 @@
 /* get_many considarations:
  * Avoid using get_many() on the consumer side and using put() on the producer.
  * The get_many() thread is notified on every single put(), however immediatly
- * goes to sleep again because the Queue is not big enought. Hence a lot of
+ * goes to sleep again because the Queue is not big enough. Hence a lot of
  * context switches for nothing. So it is recommended to use get_many() and
  * put_many() together with the same size of items.
  */
@@ -30,7 +30,7 @@
     catch (std::exception &e) { \
         PyErr_Format(PyExc_Exception, error_txt1, e.what()); return ret_val;} \
     catch (...) { \
-        PyErr_Format(PyExc_Exception, error_txt1, "unkown error"); return ret_val;}
+        PyErr_Format(PyExc_Exception, error_txt1, "unknown error"); return ret_val;}
 
 /* Helper class to get or release the GIL in a exception safe manner */
 class AllowThreads {
@@ -95,7 +95,7 @@ Queue_init(Queue *self, PyObject *args, PyObject *kwargs)
 
     BEGIN_SAFE_CALL
         self->bridge = new Bridge();
-    END_SAFE_CALL("Error Creating underlying queue: %s", -1)
+    END_SAFE_CALL("Error creating underlying queue: %s", -1)
     return 0;
 }
 
@@ -338,7 +338,7 @@ Queue_put_many(Queue *self, PyObject *args, PyObject *kwargs)
     if (self->maxsize > 0 and items_len > self->maxsize) {
         return PyErr_Format(
                     PyExc_ValueError,
-                    "items of size %i is bigger then maxsize: %i",
+                    "items of size %i is bigger than maxsize: %i",
                     items_len,
                     self->maxsize);
     }
@@ -358,7 +358,7 @@ Queue_put_many(Queue *self, PyObject *args, PyObject *kwargs)
         return NULL;
     }
 
-    while (itertor_item = PyIter_Next(iterator)) {
+    while ((itertor_item = PyIter_Next(iterator))) {
         self->bridge->queue.push_back(itertor_item);
         self->unfinished_tasks += 1;
 
@@ -611,7 +611,7 @@ Queue_task_done(Queue *self)
         self->bridge->all_tasks_done_cond.notify_all();
     }
 
-    END_SAFE_CALL("Error in task done: %s", NULL)
+    END_SAFE_CALL("Error in task_done: %s", NULL)
     Py_RETURN_NONE;
 }
 
