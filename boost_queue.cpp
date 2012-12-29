@@ -523,10 +523,6 @@ Queue_get_many(Queue *self, PyObject *args, PyObject *kwargs)
                 self->maxsize);
     }
 
-    if ((result_tuple = PyTuple_New(items)) == NULL) {
-        return NULL;
-    }
-
     BEGIN_SAFE_CALL
 
     boost::mutex::scoped_lock lock(self->bridge->mutex, boost::try_to_lock);
@@ -535,6 +531,10 @@ Queue_get_many(Queue *self, PyObject *args, PyObject *kwargs)
     }
 
     if (not _wait_for_items(self, block, timeout, lock, items)) {
+        return NULL;
+    }
+
+    if ((result_tuple = PyTuple_New(items)) == NULL) {
         return NULL;
     }
 
