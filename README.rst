@@ -27,6 +27,11 @@ concurrent_queue.hpp contains a Python independent C++ Queue.
 Changelog
 =========
 
+0.4.2 - December 29, 2012
+------------------------
+
+* Fix memory leak in get_many (Appears only if the timeout is reached)
+
 0.4.1 - October 09, 2012
 ------------------------
 
