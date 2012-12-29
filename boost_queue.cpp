@@ -203,7 +203,7 @@ _wait_for_free_slots(
         bool block,
         double timeout,
         boost::mutex::scoped_lock& lock,
-        Py_ssize_t nb_of_items)
+        size_t nb_of_items)
 {
     boost::uint64_t timeout_millis = static_cast<boost::uint64_t>(timeout*1000);
 
@@ -335,7 +335,7 @@ Queue_put_many(Queue *self, PyObject *args, PyObject *kwargs)
                 items_len);
     }
 
-    if (self->maxsize > 0 and items_len > self->maxsize) {
+    if (self->maxsize > 0 and static_cast<size_t>(items_len) > self->maxsize) {
         return PyErr_Format(
                     PyExc_ValueError,
                     "items of size %i is bigger than maxsize: %i",
@@ -350,7 +350,7 @@ Queue_put_many(Queue *self, PyObject *args, PyObject *kwargs)
         _wait_for_lock(lock);
     }
 
-    if (not _wait_for_free_slots(self, block, timeout, lock, items_len)) {
+    if (not _wait_for_free_slots(self, block, timeout, lock, static_cast<size_t>(items_len))) {
         return NULL;
     }
 
@@ -401,7 +401,7 @@ _wait_for_items(
 {
     boost::uint64_t timeout_millis = static_cast<boost::uint64_t>(timeout*1000);
 
-    if (self->bridge->queue.size() >= items_len) {
+    if (self->bridge->queue.size() >= static_cast<size_t>(items_len)) {
         /* Fall through the end of method */
     }
     else if (not block) {
@@ -411,7 +411,7 @@ _wait_for_items(
     else if (timeout > 0) {
         boost::system_time abs_timeout = boost::get_system_time();
         abs_timeout += boost::posix_time::milliseconds(timeout_millis);
-        while (not (self->bridge->queue.size() >= items_len)) {
+        while (self->bridge->queue.size() < items_len) {
             if (not _timed_wait_empty(self->bridge, lock, abs_timeout)) {
                 PyErr_Format(EmptyError, "Queue Empty");
                 return false;
@@ -419,7 +419,7 @@ _wait_for_items(
         }
     }
     else {
-        while (not (self->bridge->queue.size() >= items_len)) {
+        while (not (self->bridge->queue.size() >= static_cast<size_t>(items_len))) {
             _blocked_wait_empty(self->bridge, lock);
         }
     }
@@ -515,7 +515,7 @@ Queue_get_many(Queue *self, PyObject *args, PyObject *kwargs)
     }
 
 
-    if (self->maxsize > 0 and items > self->maxsize) {
+    if (self->maxsize > 0 and static_cast<size_t>(items) > self->maxsize) {
         return PyErr_Format(
                 PyExc_ValueError,
                 "you want to get %ld but maxsize is %i",
