@@ -16,7 +16,7 @@
 #include <boost/thread/thread_time.hpp>
 #include <boost/foreach.hpp>
 
-/* get_many considarations:
+/* get_many considerations:
  * Avoid using get_many() on the consumer side and using put() on the producer.
  * The get_many() thread is notified on every single put(), however immediatly
  * goes to sleep again because the Queue is not big enough. Hence a lot of
@@ -128,7 +128,7 @@ Queue_dealloc(Queue *self)
         Queue_clear(self);
         delete self->bridge;
     }
-    self->ob_type->tp_free(reinterpret_cast<PyObject*>(self));
+    Py_TYPE(self)->tp_free(reinterpret_cast<PyObject*>(self));
 }
 
 
@@ -667,8 +667,7 @@ static PyGetSetDef Queue_getsets[] = {
 };
 
 static PyTypeObject QueueType = {
-    PyObject_HEAD_INIT(NULL)
-    0,                         /*ob_size*/
+    PyVarObject_HEAD_INIT(NULL, 0)
     "boost_queue.Queue",       /*tp_name*/
     sizeof(Queue),             /*tp_basicsize*/
     0,                         /*tp_itemsize*/
@@ -708,24 +707,49 @@ static PyTypeObject QueueType = {
     Queue_new,                 /* tp_new */
 };
 
-PyMODINIT_FUNC
-initboost_queue(void){
+#if PY_MAJOR_VERSION >= 3
+static struct PyModuleDef moduledef = {
+    PyModuleDef_HEAD_INIT,
+    "boost_queue",     /* m_name */
+    "Python wrapper for C++ Queue template using boost locking",  /* m_doc */
+    -1,                  /* m_size */
+    NULL,                /* m_methods */
+    NULL,                /* m_reload */
+    NULL,                /* m_traverse */
+    NULL,                /* m_clear */
+    NULL,                /* m_free */
+};
+#endif
+
+static PyObject *
+moduleinit(void)
+{
     PyObject* module;
     PyObject* std_lib_queue;
     PyObject* std_empty;
     PyObject* std_full;
 
     if (PyType_Ready(&QueueType) < 0) {
-        return;
+        return NULL;
     }
 
+#if PY_MAJOR_VERSION >= 3
+    module = PyModule_Create(&moduledef);
+#else
     module = Py_InitModule("boost_queue", NULL);
+#endif
     if (module == NULL) {
-        return;
+        return NULL;
     }
 
-    if((std_lib_queue = PyImport_ImportModule("Queue")) == NULL) {
-        return;
+#if PY_MAJOR_VERSION >= 3
+    std_lib_queue = PyImport_ImportModule("queue");
+#else
+    std_lib_queue = PyImport_ImportModule("Queue");
+#endif
+
+    if(std_lib_queue == NULL) {
+        return NULL;
     }
 
     if((std_empty = PyObject_GetAttrString(std_lib_queue, "Empty")) == NULL) {
@@ -757,4 +781,19 @@ initboost_queue(void){
 
     Py_INCREF((PyObject*) &QueueType);
     PyModule_AddObject(module, "Queue", (PyObject*)&QueueType);
+
+    return module;
 }
+
+PyMODINIT_FUNC
+#if PY_MAJOR_VERSION >= 3
+PyInit_boost_queue(void)
+{
+	return moduleinit();
+}
+#else
+initboost_queue(void)
+{
+	moduleinit();
+}
+#endif
