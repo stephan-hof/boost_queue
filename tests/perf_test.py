@@ -25,7 +25,7 @@ class Con(threading.Thread):
         threading.Thread.__init__(self)
 
     def run(self):
-        for _ in xrange(10**6):
+        for _ in range(10**6):
             self.q.get()
 
 class Prod(threading.Thread):
@@ -34,7 +34,7 @@ class Prod(threading.Thread):
         threading.Thread.__init__(self)
 
     def run(self):
-        for _ in xrange(10**6):
+        for _ in range(10**6):
             self.q.put(BigFatObject())
 
 if __name__ == '__main__':
@@ -46,4 +46,4 @@ if __name__ == '__main__':
     start = time.time()
     [x.start() for x in cons + prods]
     [x.join() for x in prods + cons]
-    print time.time() - start
+    print(time.time() - start)

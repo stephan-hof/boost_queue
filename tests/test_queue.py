@@ -6,7 +6,11 @@ from boost_queue import Queue
 from boost_queue import Full
 from boost_queue import Empty
 
-import Queue as std_queue
+import sys
+if sys.version_info[0] >= 3:
+    import queue as std_queue
+else:
+    import Queue as std_queue
 
 
 class TestQueue(TestCase):
@@ -59,7 +63,7 @@ class TestQueue(TestCase):
 
     def test_get_put_with_thread_and_late_put(self):
         def consumer(test, q):
-            to_consume = range(40)
+            to_consume = list(range(40))
             for x in range(40):
                 to_consume.remove(q.get(True, 4))
             self.assertEqual(to_consume, [])
@@ -129,8 +133,8 @@ class TestQueue(TestCase):
     def test_put_many_too_many_items(self):
         q = Queue(1)
         msg = "items of size 3 is bigger then maxsize: 1"
-        with self.assertRaisesRegexp(ValueError, msg):
-                q.put_many((1, 2, 3))
+        with self.assertRaises(ValueError, msg=msg):
+            q.put_many((1, 2, 3))
 
         q.put(None)
         with self.assertRaises(Full):
@@ -157,7 +161,7 @@ class TestQueue(TestCase):
     def test_get_many_not_enough_space(self):
         q = Queue(10)
         msg = "you want to get 12 but maxsize is 10"
-        with self.assertRaisesRegexp(ValueError, msg):
+        with self.assertRaises(ValueError, msg=msg):
             q.get_many(12)
 
         with self.assertRaises(Empty):
